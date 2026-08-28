@@ -238,13 +238,21 @@ pub const Logfire = struct {
     // spans
     // ========================================================================
 
-    /// create a span with the given name and attributes
+    /// create a span with the given name and attributes, parented to the
+    /// current span on this thread (if any)
     pub fn createSpan(self: *Self, name: []const u8, attrs: anytype) Span {
+        return self.createSpanWithParent(name, attrs, tl_current_span_context);
+    }
+
+    /// create a span under an explicit parent. otel's answer to work that
+    /// crosses a thread/task boundary is explicit context propagation — the
+    /// spawning side captures `logfire.currentContext()` and the task starts
+    /// its span with it. the new span becomes the current span on the
+    /// calling thread until `end()`, so anything it calls nests normally.
+    pub fn createSpanWithParent(self: *Self, name: []const u8, attrs: anytype, parent_context: ?SpanContext) Span {
         if (self.tracer) |*tracer| {
             const otel_attrs = attrsToOtel(attrs);
-
-            // capture parent context before creating new span
-            const parent_context = tl_current_span_context;
+            const previous = tl_current_span_context;
 
             // build context with parent span if one exists
             var ctx_storage: [1]otel_api.ContextKeyValue = undefined;
@@ -260,13 +268,13 @@ pub const Logfire = struct {
                 .kind = .internal,
                 .attributes = otel_attrs,
             }, ctx) catch {
-                return .{ .inner = null, .parent_context = parent_context };
+                return .{ .inner = null, .parent_context = previous };
             };
 
             // update thread-local context with new span
             tl_current_span_context = span_result.getSpanContext();
 
-            return .{ .inner = span_result, .parent_context = parent_context };
+            return .{ .inner = span_result, .parent_context = previous };
         }
         return .{ .inner = null, .parent_context = null };
     }
@@ -342,9 +350,20 @@ pub const StatusCode = enum {
     @"error",
 };
 
+/// an opaque handle to a span's identity (trace id + span id), safe to copy
+/// across threads. capture with `currentContext()` or `Span.context()`.
+pub const SpanContext = otel_api.trace.Span.Context;
+
 pub const Span = struct {
     inner: ?otel_api.trace.Span,
-    parent_context: ?otel_api.trace.Span.Context,
+    /// the thread's current context before this span started; restored on end
+    parent_context: ?SpanContext,
+
+    /// this span's context, for parenting work on another thread/task
+    pub fn context(self: *const Span) ?SpanContext {
+        if (self.inner) |*s| return @constCast(s).getSpanContext();
+        return null;
+    }
 
     /// end the span - takes *const for API compatibility with legacy logfire
     pub fn end(self: *const Span) void {
@@ -421,6 +440,20 @@ pub fn configure(config: Config) !*Logfire {
 pub fn span(name: []const u8, attrs: anytype) Span {
     if (global_instance) |lf| {
         return lf.createSpan(name, attrs);
+    }
+    return .{ .inner = null, .parent_context = null };
+}
+
+/// the current span's context on this thread, or null. capture it before
+/// spawning work elsewhere and hand it to `spanWithParent` there.
+pub fn currentContext() ?SpanContext {
+    return tl_current_span_context;
+}
+
+/// create a span under an explicit parent (see `Logfire.createSpanWithParent`)
+pub fn spanWithParent(parent: ?SpanContext, name: []const u8, attrs: anytype) Span {
+    if (global_instance) |lf| {
+        return lf.createSpanWithParent(name, attrs, parent);
     }
     return .{ .inner = null, .parent_context = null };
 }
@@ -729,4 +762,17 @@ test "toOtelValue covers every primitive attribute type" {
     try testing.expectEqual(@as(usize, 2), attrs.len);
     try testing.expectEqualStrings("alpha", attrs[0].key);
     try testing.expectEqual(@as(f64, 0.5), attrs[0].value.float);
+}
+
+test "explicit parent context api is usable before configure" {
+    // without a configured instance every span is a no-op; the api must
+    // still compose so call sites don't need to know whether export is on
+    const testing = std.testing;
+    try testing.expect(currentContext() == null);
+    const outer = span("outer", .{});
+    defer outer.end();
+    const captured = outer.context();
+    const inner = spanWithParent(captured, "inner", .{});
+    defer inner.end();
+    try testing.expect(inner.context() == null);
 }

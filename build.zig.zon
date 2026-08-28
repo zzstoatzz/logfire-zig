@@ -1,6 +1,6 @@
 .{
     .name = .logfire_zig,
-    .version = "0.2.5",
+    .version = "0.2.6",
     .fingerprint = 0x9bd424192e836cc7,
     .minimum_zig_version = "0.16.0",
     .paths = .{
