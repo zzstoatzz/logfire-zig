@@ -622,7 +622,7 @@ fn toOtelValue(value: anytype) ?otel_api.common.AttributeValue {
     const T = @TypeOf(value);
     return switch (@typeInfo(T)) {
         .int, .comptime_int => .{ .int = @intCast(value) },
-        .float, .comptime_float => .{ .double = @floatCast(value) },
+        .float, .comptime_float => .{ .float = @floatCast(value) },
         .bool => .{ .bool = value },
         .optional => {
             // handle optional types - return null if the value is null
@@ -708,4 +708,25 @@ test "logFn falls back to defaultLog when bridge not initialized" {
     // gets initialized inside it). otel-zig's bridge handles this with a
     // fast-path check on its own atomic init flag.
     logFn(.info, .testing, "boot-time message: {d}", .{42});
+}
+
+test "toOtelValue covers every primitive attribute type" {
+    // float attributes went uncovered until 2026-08-28: the arm wrote
+    // `.double`, otel-zig's union spells it `.float`, and nothing here
+    // instantiated the comptime branch — consumers only found out when they
+    // passed an f64 into `logfire.span(...)` and the build failed.
+    const testing = std.testing;
+    try testing.expectEqual(@as(f64, 0.5), toOtelValue(@as(f64, 0.5)).?.float);
+    try testing.expectEqual(@as(f64, 0.25), toOtelValue(@as(f32, 0.25)).?.float);
+    try testing.expectEqual(@as(f64, 1.5), toOtelValue(1.5).?.float);
+    try testing.expectEqual(@as(i64, 7), toOtelValue(@as(u32, 7)).?.int);
+    try testing.expectEqual(true, toOtelValue(true).?.bool);
+    try testing.expectEqualStrings("s", toOtelValue(@as([]const u8, "s")).?.string);
+    try testing.expectEqualStrings("lit", toOtelValue("lit").?.string);
+    try testing.expect(toOtelValue(@as(?f64, null)) == null);
+
+    const attrs = attrsToOtel(.{ .alpha = @as(f64, 0.5), .top_k = @as(i64, 3), .skipped = @as(?i64, null) });
+    try testing.expectEqual(@as(usize, 2), attrs.len);
+    try testing.expectEqualStrings("alpha", attrs[0].key);
+    try testing.expectEqual(@as(f64, 0.5), attrs[0].value.float);
 }
