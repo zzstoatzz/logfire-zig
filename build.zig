@@ -82,6 +82,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    b.installArtifact(example);
     const run_example = b.addRunArtifact(example);
     const example_step = b.step("example", "run example");
     example_step.dependOn(&run_example.step);

@@ -10,8 +10,8 @@
     },
     .dependencies = .{
         .opentelemetry = .{
-            .url = "https://github.com/zzstoatzz/otel-zig/archive/e058522.tar.gz",
-            .hash = "otel-0.0.1-9q9ZWt-xFADQNLqp7aJ2i2RIn8qczMTYuwHlxQr3fDOw",
+            .url = "https://github.com/zzstoatzz/otel-zig/archive/8b3a4e5.tar.gz",
+            .hash = "PLACEHOLDER",
         },
     },
 }
