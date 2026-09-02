@@ -1,6 +1,6 @@
 .{
     .name = .logfire_zig,
-    .version = "0.2.6",
+    .version = "0.3.0",
     .fingerprint = 0x9bd424192e836cc7,
     .minimum_zig_version = "0.16.0",
     .paths = .{
@@ -10,8 +10,8 @@
     },
     .dependencies = .{
         .opentelemetry = .{
-            .url = "https://github.com/zzstoatzz/otel-zig/archive/3dd08a8d4457dfb0399484f0bbaa34a9ffaac8d3.tar.gz",
-            .hash = "otel-0.0.1-9q9ZWuyoEwBOrO6iqqdS9iHIfU0CmXIgDPByXgb7_gtz",
+            .url = "https://github.com/zzstoatzz/otel-zig/archive/e058522.tar.gz",
+            .hash = "otel-0.0.1-9q9ZWt-xFADQNLqp7aJ2i2RIn8qczMTYuwHlxQr3fDOw",
         },
     },
 }

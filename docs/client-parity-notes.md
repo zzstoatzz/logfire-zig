@@ -1,4 +1,6 @@
 > adopted from the notes repo during the 2026-08-23 curation pass; project design/retro content lives with its project.
+>
+> **status 2026-09-02 (v0.3.0):** everything "what logfire-zig needs to do" below is shipped, plus pending spans, span-context on logs, and the resource attributes. The README's parity table is the current gap list; this file is the reasoning behind the shape.
 
 # logfire client architecture (cross-language)
 

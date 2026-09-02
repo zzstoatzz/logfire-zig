@@ -1,8 +1,15 @@
 const std = @import("std");
+const zon_version = @import("build.zig.zon").version;
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+
+    // telemetry.sdk.version on every resource comes from the package, not a
+    // string someone has to remember to bump
+    const options = b.addOptions();
+    options.addOption([]const u8, "version", zon_version);
+    const build_options = options.createModule();
 
     // otel-zig dependency
     const otel_dep = b.dependency("opentelemetry", .{
@@ -26,6 +33,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "otel", .module = otel_dep.module("otel") },
             .{ .name = "config", .module = config_mod },
+            .{ .name = "build_options", .module = build_options },
         },
     });
 
@@ -38,6 +46,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "otel", .module = otel_dep.module("otel") },
                 .{ .name = "config", .module = config_mod },
+                .{ .name = "build_options", .module = build_options },
             },
         }),
     });

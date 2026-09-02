@@ -1,62 +1,53 @@
-//! logfire example
+//! logfire example — the adoption recipe end to end.
 //!
-//! demonstrates the otel-zig backed API.
-//! API matches current pub-search usage patterns.
-//!
-//! run with:
-//!   LOGFIRE_TOKEN=your_token zig build example
-//!
-//! or without token for console-only output:
-//!   zig build example
+//! run with a token to see it in a project:
+//!   LOGFIRE_TOKEN=pylf_v1_us_… zig build example
+//! without one, everything below still runs and std.log goes to stderr only.
 
 const std = @import("std");
 const logfire = @import("logfire");
 
+// every std.log.* call ships as an OTEL log record under the current span,
+// and still reaches stderr
+pub const std_options: std.Options = .{ .log_level = .info, .logFn = logfire.logFn };
+
+// a panic's message is flushed before the process dies
+pub const panic = std.debug.FullPanic(logfire.panicFn);
+
+const log = std.log.scoped(.example);
+
 pub fn main() !void {
-    // configure logfire (reads LOGFIRE_TOKEN from env)
-    // API matches: logfire.configure({...})
-    _ = logfire.configure(.{
-        .service_name = "logfire-zig-otel-example",
-        .service_version = "0.1.0",
+    const lf = try logfire.configure(.{
+        .service_name = "logfire-zig-example",
+        .service_version = logfire.version,
         .environment = "development",
-    }) catch |err| {
-        std.debug.print("logfire init failed: {}, continuing\n", .{err});
-    };
+    });
+    defer lf.shutdown();
 
-    // logging - matches: logfire.info("msg", .{args})
-    logfire.info("application started", .{});
+    log.info("application started", .{});
 
-    // span with attributes - matches: logfire.span("name", .{attrs})
-    // uses const span pattern for API compatibility with pub-search
     {
+        // published as a pending span immediately, then as the real span at end
         const span = logfire.span("example.work", .{
             .iteration = @as(i64, 1),
             .query = "prefect python",
         });
         defer span.end();
 
-        // simulate work
-        std.posix.nanosleep(0, 50 * std.time.ns_per_ms);
-
-        logfire.info("work completed", .{});
+        std.Io.sleep(std.Options.debug_io, .fromMilliseconds(50), .real) catch {};
+        log.info("work completed", .{}); // carries example.work's trace/span id
     }
 
-    // nested spans
     {
         const outer = logfire.span("example.outer", .{});
         defer outer.end();
-
         {
             const inner = logfire.span("example.inner", .{});
             defer inner.end();
-
-            std.posix.nanosleep(0, 25 * std.time.ns_per_ms);
+            std.Io.sleep(std.Options.debug_io, .fromMilliseconds(25), .real) catch {};
+            inner.recordError(error.ExampleFailure); // rendered as errored
         }
     }
 
-    // metrics (stubs for now)
-    logfire.counter("requests.total", 1);
-    logfire.gaugeInt("connections.active", 42);
-
-    logfire.info("example complete", .{});
+    log.info("example complete", .{});
 }

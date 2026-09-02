@@ -39,12 +39,19 @@ pub const Config = struct {
     /// minimum log level to capture
     default_level: Level = .info,
 
-    /// console output options
+    /// console output options. while enabled, std.log records keep going to
+    /// stderr alongside the OTEL export (fly logs, journald, a terminal all
+    /// read stderr); set to null to export only.
     console: ?ConsoleOptions = .{},
 
     /// batch export settings
     batch_size: usize = 512,
     batch_timeout_ms: u64 = 500,
+
+    /// publish a `pending_span` copy of every span at start so the logfire
+    /// live view shows in-flight work (what the python and rust clients do).
+    /// costs one extra exported span per span.
+    pending_spans: bool = true,
 
     pub const SendToLogfire = enum {
         yes,
