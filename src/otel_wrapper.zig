@@ -7,9 +7,11 @@
 //!              a pending span published at start so long work is visible live
 //!   - logs:    every `std.log.*` call, through `std.options.logFn = logfire.logFn`,
 //!              carrying the current span's trace/span id and the std.log scope
-//!   - exit:    `logfire.flush()` before any `std.process.exit`, and
+//!   - exit:    `logfire.flush()` before any `std.process.exit` (bounded: at
+//!              most `exit_flush_timeout_ms` per provider), and
 //!              `pub const panic = std.debug.FullPanic(logfire.panicFn)` so a
-//!              panic's message ships before the process dies
+//!              panic's trace reaches stderr and its message ships before
+//!              the process dies
 //!
 //! usage:
 //!   const logfire = @import("logfire");
@@ -217,12 +219,12 @@ pub const Logfire = struct {
         otel_sdk.std_log_bridge.deinit();
 
         if (self.trace_provider) |p| {
-            _ = p.shutdown(null);
+            _ = p.shutdown(exit_flush_timeout_ms);
             p.deinit(); // deinits + destroys every registered processor, the pending emitter included
             self.allocator.destroy(p);
         }
         if (self.log_provider) |p| {
-            _ = p.shutdown(null);
+            _ = p.shutdown(exit_flush_timeout_ms);
             p.deinit();
             p.destroy();
         }
@@ -235,10 +237,21 @@ pub const Logfire = struct {
         self.allocator.destroy(self);
     }
 
-    /// force flush pending telemetry (traces and logs)
+    /// flush pending telemetry (traces and logs), waiting at most
+    /// `exit_flush_timeout_ms` per provider. Never unbounded: a flush runs on
+    /// exit paths (watchdogs, panics), and an unbounded wait on a wedged or
+    /// dead export thread turns "exit for restart" into a hang. 2026-09-03: a
+    /// process panicked on its export thread, the panic hook waited for that
+    /// export to finish, and the watchdog that fired ten minutes later waited
+    /// on the same thing; the process sat alive and dead for 22 hours.
     pub fn flush(self: *Self) void {
-        if (self.trace_provider) |p| _ = p.forceFlush(null);
-        if (self.log_provider) |p| _ = p.forceFlush(null);
+        self.flushWithin(exit_flush_timeout_ms);
+    }
+
+    /// flush with an explicit per-provider bound in milliseconds
+    pub fn flushWithin(self: *Self, timeout_ms: u64) void {
+        if (self.trace_provider) |p| _ = p.forceFlush(timeout_ms);
+        if (self.log_provider) |p| _ = p.forceFlush(timeout_ms);
     }
 
     // ========================================================================
@@ -521,25 +534,54 @@ pub fn spanWithParent(parent: ?SpanContext, name: []const u8, attrs: anytype) Sp
     return .{ .inner = null, .parent_context = null };
 }
 
-/// flush pending spans and logs now. Call before `std.process.exit`: the
+/// the most any exit-path flush waits, per provider. Export batches every
+/// `batch_timeout_ms` (500 ms default) and the OTLP transport retries inside
+/// its own budget, so a healthy exporter finishes well inside this; an
+/// unhealthy one must not hold the process.
+pub const exit_flush_timeout_ms: u64 = 3000;
+
+/// a panic gets less: the process is dying and the trace is already on stderr
+pub const panic_flush_timeout_ms: u64 = 1500;
+
+/// flush pending spans and logs now, waiting at most
+/// `exit_flush_timeout_ms` per provider. Call before `std.process.exit`: the
 /// batch processors export on a timer, so anything emitted in the last
 /// `batch_timeout_ms` is still in memory when the process ends. A watchdog
-/// that logs "no progress, exiting" and exits without this ships nothing.
+/// that logs "no progress, exiting" and exits without this ships nothing —
+/// and one that waits on this without a bound never exits.
 pub fn flush() void {
     if (global_instance) |lf| lf.flush();
 }
 
-/// flush and tear down the global instance (idempotent)
+/// flush with an explicit per-provider bound in milliseconds
+pub fn flushWithin(timeout_ms: u64) void {
+    if (global_instance) |lf| lf.flushWithin(timeout_ms);
+}
+
+/// flush and tear down the global instance (idempotent, bounded)
 pub fn shutdown() void {
     if (global_instance) |lf| lf.shutdown();
 }
 
+var panicking = std.atomic.Value(bool).init(false);
+
 /// a `std.debug.FullPanic` hook that ships the panic message before dying:
 ///   pub const panic = std.debug.FullPanic(logfire.panicFn);
+///
+/// Order matters. The message and stack trace go to stderr FIRST, because
+/// stderr is what the host captures whether or not export ever completes.
+/// Then the message is logged and flushed within `panic_flush_timeout_ms`.
+/// A panic raised while this hook runs (from inside the telemetry path)
+/// skips straight to the default handler instead of re-entering it.
 pub fn panicFn(msg: []const u8, first_trace_addr: ?usize) noreturn {
+    if (panicking.swap(true, .acq_rel)) std.debug.defaultPanic(msg, first_trace_addr);
+
+    std.debug.print("panic: {s}\n", .{msg});
+    std.debug.dumpCurrentStackTrace(.{ .first_address = first_trace_addr });
+
     std.log.err("panic: {s}", .{msg});
-    flush();
-    std.debug.defaultPanic(msg, first_trace_addr);
+    flushWithin(panic_flush_timeout_ms);
+    std.process.abort();
 }
 
 /// log at trace level
@@ -797,6 +839,17 @@ test "configLevelToSeverity maps every Config.Level" {
 test "logFn signature matches std.options.logFn shape" {
     const expected_fn_ptr: @TypeOf(std.log.defaultLog) = logFn;
     _ = expected_fn_ptr;
+}
+
+test "flush is bounded and returns promptly with no exporter" {
+    const lf = try configure(.{ .service_name = "t", .send_to_logfire = .no });
+    defer lf.shutdown();
+    const t0 = std.Io.Timestamp.now(io, .awake).nanoseconds;
+    lf.flush();
+    lf.flushWithin(10);
+    const elapsed_ms: u64 = @intCast(@divFloor(std.Io.Timestamp.now(io, .awake).nanoseconds - t0, std.time.ns_per_ms));
+    try std.testing.expect(elapsed_ms < exit_flush_timeout_ms);
+    try std.testing.expect(panic_flush_timeout_ms < exit_flush_timeout_ms);
 }
 
 test "panicFn signature matches std.debug.FullPanic" {

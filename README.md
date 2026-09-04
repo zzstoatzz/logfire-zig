@@ -39,7 +39,7 @@ pub fn main() !void {
 
 ```zig
 .logfire = .{
-    .url = "https://tangled.org/zzstoatzz.io/logfire-zig/archive/v0.3.1.tar.gz",
+    .url = "https://tangled.org/zzstoatzz.io/logfire-zig/archive/v0.3.2.tar.gz",
     .hash = "...", // zig build tells you
 },
 ```
@@ -56,9 +56,17 @@ Run with `LOGFIRE_TOKEN=pylf_v1_us_…`. Without a token nothing is exported and
 
 ### the rules that keep telemetry honest
 
-- **flush before you exit.** Export is batched on a timer (500 ms). A watchdog
-  that logs "no progress, exiting" and calls `std.process.exit` ships nothing
-  unless it calls `logfire.flush()` first. `lf.shutdown()` flushes too.
+- **flush before you exit, and the flush is bounded.** Export is batched on
+  a timer (500 ms). A watchdog that logs "no progress, exiting" and calls
+  `std.process.exit` ships nothing unless it calls `logfire.flush()` first.
+  `lf.shutdown()` flushes too. Both wait at most `exit_flush_timeout_ms`
+  (3 s) per provider — never unbounded, because an exit path that waits on a
+  wedged or dead export thread does not exit (0.3.1 did this; a panic on the
+  export thread left a process alive-but-dead for 22 hours).
+- **a panic prints its trace before it ships.** `panicFn` writes the message
+  and stack trace to stderr first, then logs and flushes within
+  `panic_flush_timeout_ms` (1.5 s), then aborts. A panic raised inside the
+  telemetry path falls through to the default handler instead of re-entering.
 - **spans across tasks need an explicit parent.** The current span lives in
   thread-local state, so a span opened inside `io.concurrent` or a spawned
   thread starts as a trace root. Capture `logfire.currentContext()` on the
@@ -87,7 +95,8 @@ Every signal carries the resource: `service.name`, `service.version`,
 
 ```zig
 const lf = try logfire.configure(.{ .service_name = "svc" }); // *Logfire
-lf.flush();      // or logfire.flush()
+lf.flush();      // or logfire.flush(); bounded by exit_flush_timeout_ms
+lf.flushWithin(500);
 lf.shutdown();   // or logfire.shutdown()
 
 const span = logfire.span("op", .{ .user_id = @as(i64, 7) });
