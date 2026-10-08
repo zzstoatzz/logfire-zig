@@ -10,10 +10,10 @@ zig 0.15+ SDK for pydantic logfire - OTLP HTTP/JSON export for traces, logs, met
 
 look at these for patterns, don't reinvent:
 
-- `~/tangled.sh/@zzstoatzz.io/prefect-server/` - zig 0.15 http server, json handling
-- `~/tangled.sh/@zzstoatzz.io/zat/` - zig 0.15 AT Protocol client
-- `~/tangled.sh/@zzstoatzz.io/pub-search/` - zig backend patterns
-- `~/tangled.sh/@zzstoatzz.io/notes/languages/ziglang/0.15/` - zig 0.15 syntax notes
+- `~/tangled.org/zzstoatzz.io/prefect-server/` - zig http server, json handling
+- `~/tangled.org/zat.dev/zat/` - zig AT Protocol client
+- `~/tangled.org/zzstoatzz.io/pub-search/` - zig backend patterns
+- `~/tangled.org/zzstoatzz.io/notes/languages/ziglang/` - zig notes, by topic and by version
 
 ## zig 0.15 patterns
 
@@ -93,7 +93,7 @@ const token = std.posix.getenv("LOGFIRE_WRITE_TOKEN") orelse
 
 ```bash
 zig build test     # run tests
-zig build example  # run examples/basic.zig
+zig build example  # run examples/otel_basic.zig
 ```
 
 test with real export requires LOGFIRE_WRITE_TOKEN in .env
