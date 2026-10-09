@@ -304,7 +304,7 @@ pub const Logfire = struct {
 
     pub fn logMessage(self: *Self, comptime level: Config.Level, comptime fmt: []const u8, args: anytype) void {
         if (self.config.console) |console| {
-            if (console.enabled and @intFromEnum(level) >= @intFromEnum(console.min_level)) {
+            if (console.enabled and @backingInt(level) >= @backingInt(console.min_level)) {
                 std.debug.print("[{s}] ", .{level.name()});
                 std.debug.print(fmt ++ "\n", args);
             }
@@ -787,7 +787,7 @@ fn toOtelValue(value: anytype) ?otel_api.common.AttributeValue {
 
 /// number of fields an attrs struct literal carries (0 for anything else)
 fn attrCount(comptime T: type) usize {
-    return if (@typeInfo(T) == .@"struct") @typeInfo(T).@"struct".fields.len else 0;
+    return if (@typeInfo(T) == .@"struct") @typeInfo(T).@"struct".field_names.len else 0;
 }
 
 /// Stack-resident attribute list sized at comptime for one call site. The
@@ -814,8 +814,8 @@ fn AttrStorage(comptime capacity: usize) type {
 fn appendAttrs(storage: anytype, attrs: anytype) void {
     const T = @TypeOf(attrs);
     if (@typeInfo(T) != .@"struct") return;
-    inline for (@typeInfo(T).@"struct".fields) |field| {
-        if (toOtelValue(@field(attrs, field.name))) |val| storage.push(field.name, val);
+    inline for (@typeInfo(T).@"struct".field_names) |name| {
+        if (toOtelValue(@field(attrs, name))) |val| storage.push(name, val);
     }
 }
 
