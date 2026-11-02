@@ -77,12 +77,12 @@ Run with `LOGFIRE_TOKEN=pylf_v1_us_…`. Without a token nothing is exported and
 
 ## what a span carries
 
-`logfire.span(name, attrs)` exports an OTEL span with your attributes, and,
-by default, a **pending span** at start (`logfire.span_type = pending_span`)
-so in-flight work shows in the live view before it finishes — a 10-minute
-sync pass is visible at second one, not minute ten. `span.setStatus(.@"error", …)`
+`logfire.span(name, attrs)` exports an OTEL span with your attributes.
+Opt into `pending_spans = true` to also export a copy at start
+(`logfire.span_type = pending_span`) for in-flight visibility. This doubles
+span ingestion and is disabled by default. `span.setStatus(.@"error", …)`
 and `span.recordError(err)` also stamp `logfire.level_num = 17` so the span
-renders as errored. `pending_spans = false` in the config turns the copies off.
+renders as errored.
 
 Every log record carries `code.module.name` (the `std.log` scope), the level
 as `severity_text`, and the current span's `trace_id`/`span_id`.
@@ -128,7 +128,7 @@ Attribute values: integers, floats, bools, strings, and optionals of those
 | `base_url` | `OTEL_EXPORTER_OTLP_ENDPOINT` | from the token's region |
 | `send_to_logfire` | — | `.if_token_present` |
 | `console` | — | enabled: `std.log` keeps writing to stderr |
-| `pending_spans` | — | `true` |
+| `pending_spans` | — | `false` |
 | `batch_timeout_ms` | — | 500 |
 
 ## parity with logfire-rust

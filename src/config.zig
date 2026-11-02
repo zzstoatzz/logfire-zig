@@ -51,7 +51,7 @@ pub const Config = struct {
     /// publish a `pending_span` copy of every span at start so the logfire
     /// live view shows in-flight work (what the python and rust clients do).
     /// costs one extra exported span per span.
-    pending_spans: bool = true,
+    pending_spans: bool = false,
 
     pub const SendToLogfire = enum {
         yes,
