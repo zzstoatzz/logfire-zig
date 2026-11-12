@@ -39,7 +39,7 @@ pub fn main() !void {
 
 ```zig
 .logfire = .{
-    .url = "https://tangled.org/zzstoatzz.io/logfire-zig/archive/v0.3.2.tar.gz",
+    .url = "https://tangled.org/zzstoatzz.io/logfire-zig/archive/v0.4.0.tar.gz",
     .hash = "...", // zig build tells you
 },
 ```
