@@ -129,7 +129,16 @@ Attribute values: integers, floats, bools, strings, and optionals of those
 | `send_to_logfire` | — | `.if_token_present` |
 | `console` | — | enabled: `std.log` keeps writing to stderr |
 | `pending_spans` | — | `false` |
+| `sample_rate` | `LOGFIRE_SAMPLE_RATE` | 1.0 |
 | `batch_timeout_ms` | — | 500 |
+
+`sample_rate` keeps that share of traces, decided once at the root span from the
+trace id; child spans follow their parent, so a trace is kept or dropped whole.
+Inside a dropped trace, `std.log` records below warn are dropped too, warn and err
+records are always exported, and `recordError` exports an err log record carrying
+the trace id instead of the span. Logs outside any span are not sampled. The
+decision is made when a trace starts, so a slow or failing trace is not kept
+for that reason; log what you need to see at warn or above.
 
 ## parity with logfire-rust
 

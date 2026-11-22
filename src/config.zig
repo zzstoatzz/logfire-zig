@@ -53,6 +53,13 @@ pub const Config = struct {
     /// costs one extra exported span per span.
     pending_spans: bool = false,
 
+    /// fraction of new traces to export, decided once at the root span from
+    /// the trace id; child spans follow their parent, so a trace is kept or
+    /// dropped whole. inside a dropped trace, logs below warn are dropped too;
+    /// warn and err logs are always exported. 1.0 exports everything.
+    /// env: LOGFIRE_SAMPLE_RATE
+    sample_rate: ?f64 = null,
+
     pub const SendToLogfire = enum {
         yes,
         no,
@@ -114,6 +121,13 @@ pub const Config = struct {
             resolved.environment = cGetenv("LOGFIRE_ENVIRONMENT");
         }
 
+        if (resolved.sample_rate == null) {
+            if (cGetenv("LOGFIRE_SAMPLE_RATE")) |raw| {
+                resolved.sample_rate = std.fmt.parseFloat(f64, raw) catch null;
+            }
+        }
+        resolved.sample_rate = std.math.clamp(resolved.sample_rate orelse 1.0, 0.0, 1.0);
+
         // base URL - derive from token region if not explicit
         if (resolved.base_url == null) {
             if (cGetenv("OTEL_EXPORTER_OTLP_ENDPOINT")) |endpoint| {
@@ -164,6 +178,13 @@ test "resolve from environment" {
     };
     const resolved = config.resolve();
     try std.testing.expectEqualStrings("test", resolved.service_name.?);
+}
+
+test "sample_rate defaults to 1 and clamps to [0, 1]" {
+    try std.testing.expectEqual(@as(?f64, 1.0), (Config{ .sample_rate = 1.0 }).resolve().sample_rate);
+    try std.testing.expectEqual(@as(?f64, 1.0), (Config{ .sample_rate = 3.0 }).resolve().sample_rate);
+    try std.testing.expectEqual(@as(?f64, 0.0), (Config{ .sample_rate = -1.0 }).resolve().sample_rate);
+    try std.testing.expectEqual(@as(?f64, 0.25), (Config{ .sample_rate = 0.25 }).resolve().sample_rate);
 }
 
 test "getBaseUrlFromToken us" {

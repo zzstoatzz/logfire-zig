@@ -79,6 +79,10 @@ pub const Logfire = struct {
     tracer: ?otel_api.trace.Tracer = null,
     logger: ?otel_api.logs.Logger = null,
 
+    // the provider's sampler points into these, so they live as long as self
+    ratio_sampler: otel_sdk.trace.samplers.TraceIdRatioBasedSampler = undefined,
+    parent_sampler: otel_sdk.trace.samplers.ParentBasedSampler = undefined,
+
     // heap-allocated data that must outlive providers
     auth_header_value: ?[]u8 = null,
     headers: ?[]std.http.Header = null,
@@ -140,7 +144,7 @@ pub const Logfire = struct {
             allocator,
             resource,
             otel_sdk.trace.createDefaultIdGenerator(),
-            otel_api.trace.Sampler{ .keep = {} },
+            self.buildSampler(resolved.sample_rate orelse 1.0),
         );
 
         var batch: *otel_sdk.trace.BatchSpanProcessor = undefined;
@@ -208,6 +212,15 @@ pub const Logfire = struct {
         });
 
         return self;
+    }
+
+    fn buildSampler(self: *Self, rate: f64) otel_api.trace.Sampler {
+        if (rate >= 1.0) return .{ .keep = {} };
+        self.ratio_sampler = otel_sdk.trace.samplers.createTraceIdRatioBased(rate, 14);
+        self.parent_sampler = otel_sdk.trace.samplers.createParentBased(
+            .{ .bridge = otel_api.trace.Sampler.Bridge.init(&self.ratio_sampler) },
+        );
+        return .{ .bridge = otel_api.trace.Sampler.Bridge.init(&self.parent_sampler) };
     }
 
     /// flush what is pending, then tear everything down. After this, std.log
@@ -311,6 +324,7 @@ pub const Logfire = struct {
         }
 
         const logger = if (self.logger) |*l| l else return;
+        if (!exportsLevel(@backingInt(level) >= @backingInt(Config.Level.warn))) return;
         const severity = configLevelToSeverity(level);
         const empty_ctx: []const otel_api.ContextKeyValue = &.{};
         if (!logger.enabled(empty_ctx, severity)) return;
@@ -497,9 +511,15 @@ pub const Span = struct {
     }
 
     /// record an error on the span (adds exception event + sets error status)
+    /// on a span the sampler dropped, the error is exported as an err log
+    /// record carrying the trace id instead, so sampling never hides failures
     pub fn recordError(self: *const Span, e: anyerror) void {
         const mutable = @constCast(self);
         if (mutable.inner) |*s| {
+            if (s.getSpanContext().trace_flags & otel_api.trace.Span.Context.SAMPLED_FLAG == 0) {
+                err("error in unsampled span: {s}", .{@errorName(e)});
+                return;
+            }
             s.recordException(e, null, null) catch {};
         }
         self.setStatus(.@"error", @errorName(e));
@@ -627,7 +647,27 @@ pub fn err(comptime fmt: []const u8, args: anytype) void {
 ///     .logFn = logfire.logFn,
 /// };
 /// ```
-pub const logFn = otel_sdk.std_log_bridge.otelLogFn;
+pub fn logFn(
+    comptime level: std.log.Level,
+    comptime scope: @EnumLiteral(),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    if (!exportsLevel(level == .err or level == .warn)) {
+        const console = if (global_instance) |lf| lf.config.console else null;
+        if (console != null and console.?.enabled) std.log.defaultLog(level, scope, format, args);
+        return;
+    }
+    otel_sdk.std_log_bridge.otelLogFn(level, scope, format, args);
+}
+
+/// a log record inside a trace the sampler dropped is exported only at warn or
+/// above, so sampling a trace also samples its chatter but never its problems
+fn exportsLevel(warn_or_above: bool) bool {
+    if (warn_or_above) return true;
+    const ctx = tl_current_span_context orelse return true;
+    return ctx.trace_flags & otel_api.trace.Span.Context.SAMPLED_FLAG != 0;
+}
 
 // ============================================================================
 // metrics (stubs - TODO: implement with otel-zig metrics)
@@ -1034,4 +1074,75 @@ test "a child's pending span names its parent" {
     child.deinit();
     parent.end(null);
     parent.deinit();
+}
+
+fn samplingFixture(lf: *Logfire, provider: *otel_sdk.trace.TracerProvider, rate: f64) !void {
+    lf.* = .{ .allocator = std.testing.allocator, .config = .{} };
+    provider.* = otel_sdk.trace.TracerProvider.init(
+        std.testing.allocator,
+        otel_sdk.resource.Resource{ .attributes = &.{}, .schema_url = null },
+        otel_sdk.trace.createDefaultIdGenerator(),
+        lf.buildSampler(rate),
+    );
+    var tp = provider.tracerProvider();
+    lf.tracer = try tp.getTracerWithScope(.{ .name = "t", .version = null, .schema_url = null, .attributes = &.{} });
+}
+
+fn isSampled(s: *const Span) bool {
+    return s.context().?.trace_flags & otel_api.trace.Span.Context.SAMPLED_FLAG != 0;
+}
+
+test "sample_rate 0 drops a trace whole and keeps only its warn and err logs" {
+    var lf: Logfire = undefined;
+    var provider: otel_sdk.trace.TracerProvider = undefined;
+    try samplingFixture(&lf, &provider, 0.0);
+    defer provider.deinit();
+
+    const root = lf.createSpan("request", .{});
+    defer root.end();
+    try std.testing.expect(!isSampled(&root));
+    const child = lf.createSpan("query", .{});
+    try std.testing.expect(!isSampled(&child));
+    try std.testing.expect(!exportsLevel(false));
+    try std.testing.expect(exportsLevel(true));
+    child.end();
+}
+
+test "sample_rate 1 keeps every trace and every log" {
+    var lf: Logfire = undefined;
+    var provider: otel_sdk.trace.TracerProvider = undefined;
+    try samplingFixture(&lf, &provider, 1.0);
+    defer provider.deinit();
+
+    const root = lf.createSpan("request", .{});
+    defer root.end();
+    try std.testing.expect(isSampled(&root));
+    const child = lf.createSpan("query", .{});
+    defer child.end();
+    try std.testing.expect(isSampled(&child));
+    try std.testing.expect(exportsLevel(false));
+}
+
+test "a fractional sample_rate keeps about that share of traces, children following roots" {
+    var lf: Logfire = undefined;
+    var provider: otel_sdk.trace.TracerProvider = undefined;
+    try samplingFixture(&lf, &provider, 0.25);
+    defer provider.deinit();
+
+    var kept: usize = 0;
+    const n = 4000;
+    for (0..n) |_| {
+        const root = lf.createSpan("request", .{});
+        const child = lf.createSpan("query", .{});
+        try std.testing.expectEqual(isSampled(&root), isSampled(&child));
+        if (isSampled(&root)) kept += 1;
+        child.end();
+        root.end();
+    }
+    try std.testing.expect(kept > n / 5 and kept < n * 3 / 10);
+}
+
+test "logs outside any span are always exported" {
+    tl_current_span_context = null;
+    try std.testing.expect(exportsLevel(false));
 }
